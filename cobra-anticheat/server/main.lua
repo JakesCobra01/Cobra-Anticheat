@@ -3,6 +3,8 @@
 -- Core server logic: receive client detections, admin auth, player data
 -- =============================================
 
+local Cfg = nil  -- set after first tick
+
 local playerData  = {}   -- [src] = { name, joinTime, flags, lastPos, ... }
 local flagCounts  = {}   -- [src][detType] = count
 local spectating  = {}   -- [adminSrc] = targetSrc
@@ -13,10 +15,11 @@ local spectating  = {}   -- [adminSrc] = targetSrc
 ---@param src number
 ---@return boolean
 function IsACAdmin(src)
-    if IsPlayerAceAllowed(src, Config.AcePermission) then return true end
+    if not Cfg then return false end  -- guard: Cfg not yet initialised
+    if IsPlayerAceAllowed(src, Cfg.AcePermission) then return true end
     local license = GetPlayerIdentifierByType(src, 'license')
     if license then
-        for _, v in ipairs(Config.CustomAdmins) do
+        for _, v in ipairs(Cfg.CustomAdmins) do
             if v == license then return true end
         end
     end
@@ -103,13 +106,13 @@ RegisterNetEvent('cobra_ac:reportDetection', function(detType, detail, isBlatant
     }
     for _, rawSrc in ipairs(GetPlayers()) do
         local s = tonumber(rawSrc)
-        if HasPerm(s, Config.Permissions.view) then
+        if HasPerm(s, Cfg.Permissions.view) then
             TriggerClientEvent('cobra_ac:pushAlert', s, alertPayload)
         end
     end
 
     -- Auto action
-    local action = Config.AutoActions[detType]
+    local action = Cfg.AutoActions[detType]
     if action == 'ban' then
         BanPlayer(src, 'Auto-ban: ' .. detType, nil, 0)
     elseif action == 'kick' then
@@ -130,7 +133,7 @@ end)
 
 RegisterNetEvent('cobra_ac:requestPlayerList', function()
     local src = source
-    if not HasPerm(src, Config.Permissions.view) then return end
+    if not HasPerm(src, Cfg.Permissions.view) then return end
     TriggerClientEvent('cobra_ac:receivePlayerList', src, BuildPlayerList())
 end)
 
@@ -138,7 +141,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminKick', function(targetId, reason)
     local src = source
-    if not HasPerm(src, Config.Permissions.kick) then return end
+    if not HasPerm(src, Cfg.Permissions.kick) then return end
     targetId = tonumber(targetId)
     if not GetPlayerName(targetId) then return end
     LogAdminAction(src, 'KICK', targetId, reason, 'panel')
@@ -149,7 +152,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminBan', function(targetId, reason, duration)
     local src = source
-    if not HasPerm(src, Config.Permissions.ban) then return end
+    if not HasPerm(src, Cfg.Permissions.ban) then return end
     targetId = tonumber(targetId)
     if not GetPlayerName(targetId) then return end
     LogAdminAction(src, 'BAN', targetId, ('Reason: %s | Duration: %s min'):format(reason or 'N/A', tostring(duration or 0)), 'panel')
@@ -160,7 +163,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminUnban', function(identifier)
     local src = source
-    if not HasPerm(src, Config.Permissions.unban) then return end
+    if not HasPerm(src, Cfg.Permissions.unban) then return end
     if UnbanPlayer(identifier, src) then
         LogAdminAction(src, 'UNBAN', nil, 'Identifier: ' .. identifier, 'panel')
         TriggerClientEvent('cobra_ac:notify', src, 'Player unbanned: ' .. identifier, 'success')
@@ -174,7 +177,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminOfflineBan', function(identifier, reason, duration)
     local src = source
-    if not HasPerm(src, Config.Permissions.ban) then return end
+    if not HasPerm(src, Cfg.Permissions.ban) then return end
     if not identifier or identifier == '' then
         TriggerClientEvent('cobra_ac:notify', src, 'Invalid identifier.', 'error')
         return
@@ -184,7 +187,7 @@ RegisterNetEvent('cobra_ac:adminOfflineBan', function(identifier, reason, durati
     local durStr    = (not duration or duration == 0) and 'Permanent' or (duration .. ' minutes')
     reason          = reason ~= '' and reason or 'Banned by admin'
 
-    if Config.TxAdmin.enabled and GetResourceState('monitor') == 'started' then
+    if Cfg.TxAdmin.enabled and GetResourceState('monitor') == 'started' then
         -- Route through txAdmin — pass as identifier ban
         local durationISO = nil
         if duration and duration > 0 then
@@ -193,7 +196,7 @@ RegisterNetEvent('cobra_ac:adminOfflineBan', function(identifier, reason, durati
         local ok, err = pcall(function()
             exports['monitor']:banPlayer({
                 author      = adminName,
-                reason      = Config.TxAdmin.reasonPrefix .. reason,
+                reason      = Cfg.TxAdmin.reasonPrefix .. reason,
                 identifiers = { identifier },
                 expiration  = durationISO,
             })
@@ -237,15 +240,15 @@ RegisterNetEvent('cobra_ac:adminOfflineBan', function(identifier, reason, durati
         { name = '👮 Issued By',   value = adminName,                  inline = true  },
         { name = '🕐 Time (UTC)', value = os.date('!%Y-%m-%d %H:%M:%S'), inline = false },
     }
-    if Config.Webhooks.bans and Config.Webhooks.bans ~= 'YOUR_WEBHOOK_URL_HERE' then
-        PerformHttpRequest(Config.Webhooks.bans, function() end, 'POST',
+    if Cfg.Webhooks.bans and Cfg.Webhooks.bans ~= 'YOUR_WEBHOOK_URL_HERE' then
+        PerformHttpRequest(Cfg.Webhooks.bans, function() end, 'POST',
             json.encode({
-                username = Config.ServerName .. ' | Cobra Anti-Cheat',
+                username = Cfg.ServerName .. ' | Cobra Anti-Cheat',
                 embeds   = {{
                     title     = '🔨 OFFLINE PLAYER BANNED',
-                    color     = Config.Colors.ban,
+                    color     = Cfg.Colors.ban,
                     fields    = fields,
-                    footer    = { text = 'Cobra Anti-Cheat | ' .. Config.ServerName },
+                    footer    = { text = 'Cobra Anti-Cheat | ' .. Cfg.ServerName },
                     timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
                 }}
             }),
@@ -262,7 +265,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminFreeze', function(targetId, frozen)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     TriggerClientEvent('cobra_ac:setFrozen', targetId, frozen)
     local act = frozen and 'FREEZE' or 'UNFREEZE'
@@ -274,7 +277,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminTeleportTo', function(targetId)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     local ped    = GetPlayerPed(targetId)
     local coords = GetEntityCoords(ped)
@@ -287,7 +290,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminBring', function(targetId)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     local ped    = GetPlayerPed(src)
     local coords = GetEntityCoords(ped)
@@ -300,7 +303,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminSpectate', function(targetId)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     spectating[src] = targetId
     TriggerClientEvent('cobra_ac:setSpectate', src, targetId)
@@ -319,7 +322,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminClearFlags', function(targetId)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     local oldFlags = json.encode(flagCounts[targetId] or {})
     flagCounts[targetId] = {}
@@ -332,7 +335,7 @@ end)
 
 RegisterNetEvent('cobra_ac:adminScreenshot', function(targetId)
     local src = source
-    if not HasPerm(src, Config.Permissions.moderate) then return end
+    if not HasPerm(src, Cfg.Permissions.moderate) then return end
     targetId = tonumber(targetId)
     if not GetPlayerName(targetId) then return end
     SendAdminScreenshot(src, targetId)
@@ -342,7 +345,7 @@ end)
 
 RegisterNetEvent('cobra_ac:openUI', function()
     local src = source
-    if not HasPerm(src, Config.Permissions.view) then return end
+    if not HasPerm(src, Cfg.Permissions.view) then return end
     local log = GetAdminLog and GetAdminLog(200) or {}
     TriggerClientEvent('cobra_ac:openPanel', src, BuildPlayerList(), log)
     LogAdminAction(src, 'PANEL OPEN', nil, nil, 'panel')
@@ -350,13 +353,23 @@ end)
 
 -- ── Periodic player list refresh ──────────────────────────────────────────────
 
+-- ── Early init ───────────────────────────────────────────────────────────────
+-- Poll until Config is populated (handles any FiveM load timing variation).
 CreateThread(function()
+    while Config == nil do Wait(100) end
+    Cfg = Config
+    print('[cobra-anticheat] main.lua initialised.')
+end)
+
+-- ── Periodic player list refresh ──────────────────────────────────────────────
+CreateThread(function()
+    Wait(500)  -- Small extra delay so init thread above is guaranteed done
     while true do
         Wait(5000)
-        -- Broadcast updated player list to all admins currently with panel open
+        if not Cfg then Wait(1000); continue end  -- wait if somehow not ready
         for _, rawSrc in ipairs(GetPlayers()) do
             local s = tonumber(rawSrc)
-            if HasPerm(s, Config.Permissions.view) then
+            if HasPerm(s, Cfg.Permissions.view) then
                 TriggerClientEvent('cobra_ac:receivePlayerList', s, BuildPlayerList())
             end
         end

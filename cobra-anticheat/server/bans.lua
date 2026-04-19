@@ -3,10 +3,13 @@
 -- Ban & kick enforcement — txAdmin or fallback bans.json
 -- Cobra Development
 --
--- FiveM note: Config is a shared global populated by config.lua.
--- Do NOT read Config at module top-level (outside a function).
--- All Config access here is inside functions called after resource start.
+-- IMPORTANT: Config is a shared global. In FiveM, onServerResourceStart fires
+-- before shared scripts finish loading. All Config access MUST be inside
+-- functions called after a CreateThread/Wait(0) tick, not in event handlers
+-- that fire during startup.
 -- =============================================
+
+local Cfg = nil  -- set after first tick
 
 -- ── Identifier helpers ────────────────────────────────────────────────────────
 
@@ -44,7 +47,7 @@ local function TxCall(fn, data)
 end
 
 local function PrefixReason(reason)
-    return Config.TxAdmin.reasonPrefix .. reason
+    return Cfg.TxAdmin.reasonPrefix .. reason
 end
 
 local function MinutesToISO(minutes)
@@ -70,7 +73,7 @@ local function TxBan(src, reason, adminName, duration)
     })
     Wait(200)
     if GetPlayerName(src) then
-        DropPlayer(src, Config.Bans.banMessage .. '\nReason: ' .. reason)
+        DropPlayer(src, Cfg.Bans.banMessage .. '\nReason: ' .. reason)
     end
 end
 
@@ -111,11 +114,13 @@ end
 local function LocalBan(src, reason, adminName, duration)
     local ids     = GetAllIdentifiers(src)
     local expires = (duration and duration > 0) and (os.time() + duration * 60) or 0
-    local entry   = { reason=reason, adminName=adminName, expires=expires,
-                      timestamp=os.time(), playerName=GetPlayerName(src) or 'Unknown' }
+    local entry   = {
+        reason = reason, adminName = adminName, expires = expires,
+        timestamp = os.time(), playerName = GetPlayerName(src) or 'Unknown'
+    }
     for _, id in ipairs(ids) do localBans[id] = entry end
     SaveLocalBans()
-    DropPlayer(src, Config.Bans.banMessage .. '\nReason: ' .. reason)
+    DropPlayer(src, Cfg.Bans.banMessage .. '\nReason: ' .. reason)
 end
 
 local function LocalUnban(identifier)
@@ -126,7 +131,6 @@ local function LocalUnban(identifier)
 end
 
 -- ── playerConnecting hook (fallback only) ─────────────────────────────────────
--- Registered inside onServerResourceStart so Config is guaranteed to exist.
 
 local function RegisterConnectingHook()
     AddEventHandler('playerConnecting', function(_, _, deferrals)
@@ -153,26 +157,34 @@ local function RegisterConnectingHook()
     end)
 end
 
--- ── Init — deferred to guarantee Config is available ─────────────────────────
+-- ── Init ──────────────────────────────────────────────────────────────────────
+-- CreateThread + Wait(0) defers to the next server tick, by which point
+-- all shared scripts (including config.lua) are fully executed.
 
-AddEventHandler('onServerResourceStart', function(resourceName)
-    if resourceName ~= GetCurrentResourceName() then return end
-    if Config.TxAdmin.enabled then
-        print('[cobra-anticheat] txAdmin integration enabled — bans route through txAdmin monitor.')
+CreateThread(function()
+    while Config == nil do Wait(100) end
+    Cfg = Config
+    if Cfg.TxAdmin.enabled then
+        print('[cobra-anticheat] txAdmin integration enabled — bans route through txAdmin.')
     else
         LoadLocalBans()
         RegisterConnectingHook()
-        print('[cobra-anticheat] Fallback ban mode active — using local bans.json.')
+        print('[cobra-anticheat] Fallback ban mode — using local bans.json.')
     end
 end)
 
 -- ── Public API ────────────────────────────────────────────────────────────────
 
 function BanPlayer(src, reason, adminSrc, duration)
+    if not Cfg then
+        print('[cobra-anticheat] BanPlayer called before Cfg initialised — dropping player directly')
+        DropPlayer(src, '[Cobra AC] Banned. Reason: ' .. tostring(reason))
+        return
+    end
     local adminName = (adminSrc and adminSrc ~= 0 and GetPlayerName(adminSrc))
-        or Config.TxAdmin.autoAuthor
+        or Cfg.TxAdmin.autoAuthor
     SendBanAlert(src, reason, adminName, duration)
-    if Config.TxAdmin.enabled then
+    if Cfg.TxAdmin.enabled then
         TxBan(src, reason, adminName, duration)
     else
         LocalBan(src, reason, adminName, duration)
@@ -180,20 +192,28 @@ function BanPlayer(src, reason, adminSrc, duration)
 end
 
 function KickPlayer(src, reason, adminSrc)
+    if not Cfg then
+        DropPlayer(src, '[Cobra AC] Kicked. Reason: ' .. tostring(reason))
+        return
+    end
     local adminName = (adminSrc and adminSrc ~= 0 and GetPlayerName(adminSrc))
-        or Config.TxAdmin.autoAuthor
+        or Cfg.TxAdmin.autoAuthor
     SendAdminAlert(adminSrc or 0, 'KICK', src, reason)
-    if Config.TxAdmin.enabled then
+    if Cfg.TxAdmin.enabled then
         TxKick(src, reason, adminName)
     else
-        DropPlayer(src, Config.Bans.kickMessage .. '\nReason: ' .. reason)
+        DropPlayer(src, Cfg.Bans.kickMessage .. '\nReason: ' .. reason)
     end
 end
 
 function UnbanPlayer(identifier, adminSrc)
+    if not Cfg then
+        print('[cobra-anticheat] UnbanPlayer called before Cfg initialised')
+        return false
+    end
     local adminName = (adminSrc and adminSrc ~= 0 and GetPlayerName(adminSrc)) or 'Admin'
     SendUnbanAlert(adminSrc, identifier)
-    if Config.TxAdmin.enabled then
+    if Cfg.TxAdmin.enabled then
         local ok = TxUnban(identifier, adminName)
         if not ok then
             print('[cobra-anticheat] TxUnban returned nil for: ' .. identifier)

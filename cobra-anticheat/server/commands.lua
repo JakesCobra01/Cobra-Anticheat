@@ -5,6 +5,13 @@
 -- Cobra Development
 -- =============================================
 
+local Cfg = nil
+
+CreateThread(function()
+    while Config == nil do Wait(100) end
+    Cfg = Config
+end)
+
 -- /acban [id] [duration_minutes] [reason]
 RegisterCommand('acban', function(src, args)
     if not IsACAdmin(src) then

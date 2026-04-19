@@ -19,6 +19,8 @@
 -- Cobra Development
 -- =============================================
 
+local Cfg = nil  -- set after first tick
+
 local logBuffer  = {}
 local MAX_BUFFER = 500
 local LOG_FILE   = 'adminlog.json'
@@ -54,7 +56,7 @@ end
 local function SendToWebhook(url, embed)
     if not url or url == '' or url == 'YOUR_WEBHOOK_URL_HERE' then return end
     PerformHttpRequest(url, function() end, 'POST',
-        json.encode({ username = (Config and Config.ServerName or 'Cobra') .. ' | Cobra Admin Log', embeds = { embed } }),
+        json.encode({ username = ((Config and Cfg.ServerName) or 'Cobra') .. ' | Cobra Admin Log', embeds = { embed } }),
         { ['Content-Type'] = 'application/json' }
     )
 end
@@ -160,17 +162,19 @@ local function WriteLog(adminSrc, adminName, adminIds, action, targetSrc, target
         title     = icon .. ' ' .. action,
         color     = colour,
         fields    = fields,
-        footer    = { text = 'Cobra Anti-Cheat' .. (Config and Config.ServerName and (' | ' .. Config.ServerName) or '') },
+        footer    = { text = 'Cobra Anti-Cheat' .. (Cfg and Cfg.ServerName and (' | ' .. Cfg.ServerName) or '') },
         timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
     }
 
     -- Route: general commands go to generaladmin webhook, AC actions to adminlog
-    local isGeneral = (logSource == 'general' or logSource == 'system')
-    if isGeneral and Config.Webhooks.generaladmin and Config.Webhooks.generaladmin ~= 'YOUR_WEBHOOK_URL_HERE' then
-        SendToWebhook(Config.Webhooks.generaladmin, embed)
+    -- Guard: Cfg may be nil if WriteLog is called before init thread has run
+    if Cfg then
+        local isGeneral = (logSource == 'general' or logSource == 'system')
+        if isGeneral and Cfg.Webhooks.generaladmin and Cfg.Webhooks.generaladmin ~= 'YOUR_WEBHOOK_URL_HERE' then
+            SendToWebhook(Cfg.Webhooks.generaladmin, embed)
+        end
+        SendToWebhook(Cfg.Webhooks.adminlog, embed)
     end
-    -- Everything also goes to the unified admin log channel
-    SendToWebhook(Config.Webhooks.adminlog, embed)
 end
 
 -- ── Public API ────────────────────────────────────────────────────────────────
@@ -359,4 +363,9 @@ AddEventHandler('chatMessage', function(src, name, message)
 end)
 
 -- ── Init ─────────────────────────────────────────────────────────────────────
-LoadLog()
+CreateThread(function()
+    while Config == nil do Wait(100) end
+    Cfg = Config
+    LoadLog()
+    print('[cobra-anticheat] adminlog.lua initialised.')
+end)

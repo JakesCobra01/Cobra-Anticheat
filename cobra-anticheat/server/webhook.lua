@@ -10,6 +10,8 @@
 -- Cobra Development
 -- =============================================
 
+local Cfg = nil  -- set after first tick in init thread
+
 local cooldowns       = {}  -- [src_detType] = gameTimer
 local ssScreenCooldown = {} -- [src] = gameTimer  (per-player screenshot throttle)
 
@@ -29,7 +31,7 @@ end
 ---@param embed   table
 local function SendEmbed(webhook, embed)
     SendWebhook(webhook, {
-        username   = Config.ServerName .. ' | Cobra Anti-Cheat',
+        username   = Cfg.ServerName .. ' | Cobra Anti-Cheat',
         avatar_url = '',
         embeds     = { embed },
     })
@@ -47,7 +49,7 @@ end
 
 local function CheckSsCooldown(src)
     local now = GetGameTimer()
-    local cd  = Config.Screenshots.cooldown or 30000
+    local cd  = Cfg.Screenshots.cooldown or 30000
     if ssScreenCooldown[src] and (now - ssScreenCooldown[src]) < cd then return false end
     ssScreenCooldown[src] = now
     return true
@@ -181,7 +183,8 @@ end
 ---@param src      number
 ---@param callback fun(url: string|nil)
 local function CaptureScreenshot(src, callback)
-    if not Config.Screenshots.enabled then callback(nil); return end
+    if not Cfg then callback(nil); return end
+    if not Cfg.Screenshots.enabled then callback(nil); return end
     if GetResourceState('screenshot-basic') ~= 'started' then
         print('[cobra-anticheat] screenshot-basic not running — embed will have no image.')
         callback(nil)
@@ -190,8 +193,8 @@ local function CaptureScreenshot(src, callback)
     if not CheckSsCooldown(src) then callback(nil); return end
 
     exports['screenshot-basic']:requestClientScreenshot(src, {
-        encoding = Config.Screenshots.encoding or 'jpg',
-        quality  = Config.Screenshots.quality  or 0.90,
+        encoding = Cfg.Screenshots.encoding or 'jpg',
+        quality  = Cfg.Screenshots.quality  or 0.90,
     }, function(err, url)
         if err or not url then
             print(('[cobra-anticheat] Screenshot error (SrvID %d): %s'):format(src, tostring(err)))
@@ -232,9 +235,9 @@ function SendBlatantAlert(src, detType, detail, extraData)
             title       = '🚨 BLATANT CHEAT — ' .. detType:upper(),
             description = ('Player **%s** (SrvID: **%d**) flagged for blatant cheating.'):format(
                 GetPlayerName(src) or 'Unknown', src),
-            color       = Config.Colors.blatant,
+            color       = Cfg.Colors.blatant,
             fields      = fields,
-            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
             timestamp   = os.date('!%Y-%m-%dT%H:%M:%SZ'),
         }
         -- Attach screenshot directly in embed if we got one
@@ -243,8 +246,8 @@ function SendBlatantAlert(src, detType, detail, extraData)
             fields[#fields + 1] = { name = '📸 Screenshot', value = '_Captured at moment of detection_', inline = false }
         end
 
-        SendEmbed(Config.Webhooks.main,    embed)
-        SendEmbed(Config.Webhooks.blatant, embed)
+        SendEmbed(Cfg.Webhooks.main,    embed)
+        SendEmbed(Cfg.Webhooks.blatant, embed)
     end)
 end
 
@@ -275,24 +278,24 @@ function SendSuspiciousAlert(src, detType, detail, extraData)
     if flagCounts and flagCounts[src] then
         for _, v in pairs(flagCounts[src]) do totalFlags = totalFlags + v end
     end
-    local wantScreenshot = totalFlags >= (Config.Screenshots.suspiciousFlagThreshold or 3)
+    local wantScreenshot = totalFlags >= (Cfg.Screenshots.suspiciousFlagThreshold or 3)
 
     local function SendIt(imageUrl)
         local embed = {
             title       = '⚠️ SUSPICIOUS BEHAVIOUR — ' .. detType:upper(),
             description = ('Player **%s** (SrvID: **%d**) exhibiting suspicious behaviour.'):format(
                 GetPlayerName(src) or 'Unknown', src),
-            color       = Config.Colors.suspicious,
+            color       = Cfg.Colors.suspicious,
             fields      = fields,
-            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
             timestamp   = os.date('!%Y-%m-%dT%H:%M:%SZ'),
         }
         if imageUrl then
             embed.image = { url = imageUrl }
             fields[#fields + 1] = { name = '📸 Screenshot', value = '_Captured at moment of detection_', inline = false }
         end
-        SendEmbed(Config.Webhooks.main,       embed)
-        SendEmbed(Config.Webhooks.suspicious, embed)
+        SendEmbed(Cfg.Webhooks.main,       embed)
+        SendEmbed(Cfg.Webhooks.suspicious, embed)
     end
 
     if wantScreenshot then
@@ -316,34 +319,35 @@ function SendBanAlert(src, reason, adminName, duration)
         local embed = {
             title       = '🔨 PLAYER BANNED',
             description = ('**%s** (SrvID: %d) has been banned.'):format(GetPlayerName(src) or 'Unknown', src),
-            color       = Config.Colors.ban,
+            color       = Cfg.Colors.ban,
             fields      = fields,
-            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+            footer      = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
             timestamp   = os.date('!%Y-%m-%dT%H:%M:%SZ'),
         }
         if imageUrl then embed.image = { url = imageUrl } end
-        SendEmbed(Config.Webhooks.main, embed)
-        SendEmbed(Config.Webhooks.bans, embed)
+        SendEmbed(Cfg.Webhooks.main, embed)
+        SendEmbed(Cfg.Webhooks.bans, embed)
     end)
 end
 
 --- KICK alert
 function SendKickAlert(src, reason, adminName)
-    if not Config.Webhooks.bans or Config.Webhooks.bans == 'YOUR_WEBHOOK_URL_HERE' then return end
+    if not Cfg then return end
+    if not Cfg.Webhooks.bans or Cfg.Webhooks.bans == 'YOUR_WEBHOOK_URL_HERE' then return end
     local name = GetPlayerName(src) or 'Unknown'
     local embed = {
         title     = '👢 PLAYER KICKED',
-        color     = Config.Colors.suspicious,
+        color     = Cfg.Colors.suspicious,
         fields    = {
             { name = '👤 Player',  value = '`' .. name .. '` (ID: ' .. src .. ')', inline = true  },
             { name = '📋 Reason', value = reason,                                   inline = true  },
             { name = '👮 By',     value = adminName or 'System',                   inline = true  },
             { name = '🕐 Time',   value = os.date('!%Y-%m-%d %H:%M:%S'),          inline = false },
         },
-        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
         timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
     }
-    SendEmbed(Config.Webhooks.bans, embed)
+    SendEmbed(Cfg.Webhooks.bans, embed)
 end
 
 --- UNBAN alert
@@ -351,17 +355,17 @@ function SendUnbanAlert(adminSrc, targetIdentifier)
     local adminName = (adminSrc and adminSrc ~= 0 and GetPlayerName(adminSrc)) or 'System'
     local embed = {
         title     = '✅ Player Unbanned',
-        color     = Config.Colors.unban,
+        color     = Cfg.Colors.unban,
         fields    = {
             { name = '🪪 Identifier',  value = '`' .. targetIdentifier .. '`', inline = true  },
             { name = '👮 Unbanned By', value = '`' .. adminName .. '`',         inline = true  },
             { name = '🕐 Time (UTC)', value = os.date('!%Y-%m-%d %H:%M:%S'),  inline = false },
         },
-        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
         timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
     }
-    SendEmbed(Config.Webhooks.bans,     embed)
-    SendEmbed(Config.Webhooks.adminlog, embed)
+    SendEmbed(Cfg.Webhooks.bans,     embed)
+    SendEmbed(Cfg.Webhooks.adminlog, embed)
 end
 
 --- ADMIN ACTION alert
@@ -404,13 +408,13 @@ function SendAdminAlert(adminSrc, action, targetSrc, detail)
 
     local embed = {
         title     = '🛡️ Admin Action — ' .. action,
-        color     = Config.Colors.admin,
+        color     = Cfg.Colors.admin,
         fields    = fields,
-        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+        footer    = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
         timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
     }
-    SendEmbed(Config.Webhooks.admin,    embed)
-    SendEmbed(Config.Webhooks.adminlog, embed)
+    SendEmbed(Cfg.Webhooks.admin,    embed)
+    SendEmbed(Cfg.Webhooks.adminlog, embed)
     if LogAdminAction then
         LogAdminAction(adminSrc, action, targetSrc, detail, 'panel')
     end
@@ -426,8 +430,8 @@ function SendAdminScreenshot(adminSrc, targetSrc)
     local targetName = GetPlayerName(targetSrc) or 'Unknown'
 
     exports['screenshot-basic']:requestClientScreenshot(targetSrc, {
-        encoding = Config.Screenshots.encoding or 'jpg',
-        quality  = Config.Screenshots.quality  or 0.90,
+        encoding = Cfg.Screenshots.encoding or 'jpg',
+        quality  = Cfg.Screenshots.quality  or 0.90,
     }, function(err, url)
         if err or not url then
             TriggerClientEvent('cobra_ac:notify', adminSrc, 'Screenshot failed: ' .. tostring(err), 'error')
@@ -445,7 +449,7 @@ function SendAdminScreenshot(adminSrc, targetSrc)
         local embed = {
             title       = '📸 Admin Screenshot',
             description = ('**%s** captured **%s** (SrvID: %d)'):format(adminName, targetName, targetSrc),
-            color       = Config.Colors.admin,
+            color       = Cfg.Colors.admin,
             image       = { url = url },
             fields      = {
                 { name = '👮 Admin',      value = ('`%s` (SrvID: %d)'):format(adminName, adminSrc),   inline = true  },
@@ -455,13 +459,20 @@ function SendAdminScreenshot(adminSrc, targetSrc)
                 { name = '🪪 IDs',       value = table.concat(tids, '\n'),                             inline = false },
                 { name = '⚑ Flags',      value = GetFlagSummary(targetSrc),                           inline = false },
             },
-            footer    = { text = ('Cobra Anti-Cheat | %s'):format(Config.ServerName) },
+            footer    = { text = ('Cobra Anti-Cheat | %s'):format(Cfg.ServerName) },
             timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
         }
-        SendEmbed(Config.Webhooks.admin,    embed)
-        SendEmbed(Config.Webhooks.adminlog, embed)
+        SendEmbed(Cfg.Webhooks.admin,    embed)
+        SendEmbed(Cfg.Webhooks.adminlog, embed)
 
         TriggerClientEvent('cobra_ac:notify', adminSrc, 'Screenshot sent to Discord ✓', 'success')
         LogAdminAction(adminSrc, 'SCREENSHOT', targetSrc, 'Manual admin screenshot', 'panel')
     end)
 end
+
+-- ── Init ──────────────────────────────────────────────────────────────────────
+CreateThread(function()
+    while Config == nil do Wait(100) end
+    Cfg = Config
+    print('[cobra-anticheat] webhook.lua initialised.')
+end)
